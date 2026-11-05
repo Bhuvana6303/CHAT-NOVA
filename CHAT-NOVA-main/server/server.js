@@ -1,0 +1,109 @@
+
+import express from "express";
+import "dotenv/config";
+import cors from "cors";
+import http from "http";
+import { connectDB } from "./lib/db.js";
+import userRouter from "./routes/userRoutes.js";
+import messageRouter from "./routes/messageRoutes.js";
+import { Server } from "socket.io";
+
+// create express app and http server
+const app = express();
+const server = http.createServer(app);
+
+// CORS as the very first middleware
+const allowedOrigins = [
+  process.env.FRONTEND_URL, // Use env variable for deployed frontend
+  "http://localhost:5173", // for local dev (Vite default)
+  "http://localhost:5174", // for local dev (alternative)
+  "http://localhost:8081", // for Expo web
+  "https://chat-nova-fd.onrender.com", // Deployed Render frontend
+  "https://chat-nova-b.vercel.app", // keep if needed
+].filter(Boolean); // Remove undefined values
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      origin.endsWith(".onrender.com") ||
+      origin.endsWith(".vercel.app") ||
+      origin.startsWith("http://localhost:") ||
+      origin.startsWith("http://127.0.0.1:") ||
+      origin.startsWith("http://192.168.") ||
+      origin.startsWith("http://10.0.")
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
+// initialize socket.io server
+export const io = new Server(server, {
+  cors: { origin: "*" },
+});
+// store online users
+export const userSocketMap = {};
+// socket.io connection setup
+io.on("connection", (socket) => {
+  const userId = socket.handshake.query.userId;
+  console.log("user Connected", userId);
+  if (userId) userSocketMap[userId] = socket.id;
+  // emit online users to all connected clients
+  console.log("Emitting online users:", Object.keys(userSocketMap));
+  io.emit("getOnlineUsers", Object.keys(userSocketMap));
+  socket.on("disconnect", () => {
+    console.log("user Disconnected", userId);
+    delete userSocketMap[userId];
+    console.log("Emitting online users:", Object.keys(userSocketMap));
+    io.emit("getOnlineUsers", Object.keys(userSocketMap));
+  });
+});
+
+// middleware setup
+app.use(express.json({ limit: "4mb" }));
+
+// route setup
+app.use("/api/status", (req, res) => res.send("server is live"));
+app.use("/api/auth", userRouter);
+app.use("/api/messages", messageRouter);
+
+// connect to mongodb and start server
+const PORT = process.env.PORT || 5000;
+
+const handleServerError = (error) => {
+  if (error.syscall !== "listen") {
+    console.error("Server error:", error);
+    process.exit(1);
+  }
+
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use. Stop the other process or set a different PORT.`);
+    process.exit(1);
+  }
+
+  console.error("Server error:", error);
+  process.exit(1);
+};
+
+server.on("error", handleServerError);
+
+const startServer = async () => {
+  try {
+    await connectDB();
+    server.listen(PORT, () => console.log(`server is running on port ${PORT} at localhost:${PORT}`));
+
+  } catch (err) {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  }
+};
+
+startServer();
+export default server;
